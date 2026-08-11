@@ -1,6 +1,11 @@
 import { supabase } from './supabase';
 
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
+// In production the frontend and backend are one Vercel project on one domain
+// (see /vercel.json — /api/* rewrites to the backend service), so the correct
+// default there is '' — a same-origin relative request, not a cross-origin
+// call to anything. The localhost fallback only makes sense in Vite's own dev
+// server, where the backend really does run separately on its own port.
+const API_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://localhost:3001' : '');
 
 const OFFLINE_MESSAGE = 'Check your connection — we couldn’t reach the server.';
 
