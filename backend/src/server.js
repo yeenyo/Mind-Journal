@@ -1,38 +1,14 @@
-import 'dotenv/config';
-import express from 'express';
-import cors from 'cors';
-import { rateLimit } from 'express-rate-limit';
+import app from './app.js';
+import { startScheduler } from './scheduler.js';
 
-import entriesRouter from './routes/entries.js';
-import insightsRouter from './routes/insights.js';
-import stripeRouter, { stripeWebhookHandler } from './routes/stripe.js';
-import accountRouter from './routes/account.js';
-
-const app = express();
-
-app.use(cors({ origin: process.env.FRONTEND_URL ?? 'http://localhost:5173' }));
-
-// Stripe needs the raw body to verify webhook signatures, so this route
-// is registered before the global express.json() body parser.
-app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), stripeWebhookHandler);
-
-app.use(express.json());
-
-const apiLimiter = rateLimit({ windowMs: 60 * 1000, limit: 60 });
-app.use('/api', apiLimiter);
-
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
-
-app.use('/api/entries', entriesRouter);
-app.use('/api/insights', insightsRouter);
-app.use('/api/stripe', stripeRouter);
-app.use('/api/account', accountRouter);
-
-// eslint-disable-next-line no-unused-vars
-app.use((err, _req, res, _next) => {
-  console.error('[server] unhandled error:', err);
-  res.status(500).json({ error: 'Internal server error.' });
-});
-
+// Local-dev / any-persistent-host entry point. Not used on Vercel — see
+// api/index.js there instead. The two matter for different reasons:
+// node-cron in this file needs an always-running process to fire on schedule,
+// which is exactly what a serverless platform doesn't give you; running this
+// file is how the scheduler actually works if MindJournal is ever hosted
+// somewhere with a real persistent process instead (a VM, Fly.io, etc).
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`MindJournal API listening on :${PORT}`));
+app.listen(PORT, () => {
+  console.log(`MindJournal API listening on :${PORT}`);
+  startScheduler();
+});

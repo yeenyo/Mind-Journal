@@ -1,20 +1,44 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import Alert from '../components/Alert';
+import AuthCard from '../components/AuthCard';
+import Button from '../components/Button';
+import Field from '../components/Field';
+
+const MIN_PASSWORD_LENGTH = 6;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function Login() {
   const { signIn } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [touched, setTouched] = useState({ email: false, password: false });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const trimmedEmail = email.trim();
+  const emailProblem = !trimmedEmail
+    ? 'Enter your email address.'
+    : !EMAIL_PATTERN.test(trimmedEmail)
+      ? 'That doesn’t look like an email address yet.'
+      : '';
+  const passwordProblem = !password
+    ? 'Enter your password.'
+    : password.length < MIN_PASSWORD_LENGTH
+      ? `Passwords here are at least ${MIN_PASSWORD_LENGTH} characters — check for a typo.`
+      : '';
+  const canSubmit = !emailProblem && !passwordProblem;
+
+  const markTouched = (field) => setTouched((prev) => ({ ...prev, [field]: true }));
+
   async function handleSubmit(e) {
     e.preventDefault();
+    if (!canSubmit) return;
     setError('');
     setLoading(true);
-    const { error: signInError } = await signIn(email, password);
+    const { error: signInError } = await signIn(trimmedEmail, password);
     setLoading(false);
     if (signInError) {
       setError(signInError.message);
@@ -24,42 +48,64 @@ export default function Login() {
   }
 
   return (
-    <div className="mx-auto flex min-h-[70vh] max-w-sm flex-col justify-center px-6">
-      <h1 className="text-2xl font-semibold text-calm-800">Welcome back</h1>
-      <form onSubmit={handleSubmit} className="mt-6 flex flex-col gap-4">
-        <input
+    <AuthCard
+      title="Welcome back"
+      subtitle="Pick up where you left off."
+      footer={
+        <>
+          New to MindJournal?{' '}
+          <Link
+            to="/auth/signup"
+            className="font-medium text-brand-700 underline underline-offset-2 hover:text-brand-800"
+          >
+            Create an account
+          </Link>
+        </>
+      }
+    >
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
+        <Field
+          label="Email"
           type="email"
           required
-          placeholder="Email"
+          autoComplete="email"
+          placeholder="you@example.com"
           value={email}
+          error={touched.email ? emailProblem : ''}
           onChange={(e) => setEmail(e.target.value)}
-          className="rounded-md border border-calm-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-calm-400"
+          onBlur={() => markTouched('email')}
         />
-        <input
+        <Field
+          label="Password"
           type="password"
           required
-          placeholder="Password"
+          autoComplete="current-password"
+          placeholder="Your password"
           value={password}
+          error={touched.password ? passwordProblem : ''}
           onChange={(e) => setPassword(e.target.value)}
-          className="rounded-md border border-calm-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-calm-400"
+          onBlur={() => markTouched('password')}
         />
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        <button
+
+        <Alert tone="error">{error}</Alert>
+
+        <Button
           type="submit"
-          disabled={loading}
-          className="rounded-md bg-calm-600 px-4 py-2 text-white hover:bg-calm-700 disabled:opacity-60"
+          fullWidth
+          disabled={!canSubmit}
+          loading={loading}
+          loadingText="Logging in…"
         >
-          {loading ? 'Logging in…' : 'Log in'}
-        </button>
+          Log in
+        </Button>
+
+        <Link
+          to="/auth/forgot-password"
+          className="self-center text-sm font-medium text-brand-700 underline underline-offset-2 hover:text-brand-800"
+        >
+          Forgot your password?
+        </Link>
       </form>
-      <div className="mt-4 flex justify-between text-sm text-calm-600">
-        <Link to="/auth/forgot-password" className="underline">
-          Forgot password?
-        </Link>
-        <Link to="/auth/signup" className="underline">
-          Sign up
-        </Link>
-      </div>
-    </div>
+    </AuthCard>
   );
 }

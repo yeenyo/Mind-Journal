@@ -1,19 +1,70 @@
 @import "tailwindcss";
+/* Keyframes and motion utilities live in one file so durations and easings stay
+   on a single scale — see animations.css for the rules that govern them. */
+@import "./animations.css";
 
 @theme {
-  --font-sans: 'Segoe UI', system-ui, Roboto, sans-serif;
-  --color-calm-50: #f4f8f7;
-  --color-calm-100: #e4eeec;
-  --color-calm-200: #c8dcd8;
-  --color-calm-300: #a1c3bd;
-  --color-calm-400: #74a49c;
-  --color-calm-500: #558781;
-  --color-calm-600: #436c68;
-  --color-calm-700: #385855;
-  --color-calm-800: #314846;
-  --color-calm-900: #2c3d3c;
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+
+  /* Primary — actions, links, focus states. #2563eb is brand-600. */
+  --color-brand-50: #eff6ff;
+  --color-brand-100: #dbeafe;
+  --color-brand-200: #bfdbfe;
+  --color-brand-300: #93c5fd;
+  --color-brand-400: #60a5fa;
+  --color-brand-500: #3b82f6;
+  --color-brand-600: #2563eb;
+  --color-brand-700: #1d4ed8;
+  --color-brand-800: #1e40af;
+  --color-brand-900: #1e3a8a;
+
+  /* Accent — success and positive patterns only, used sparingly. #10b981. */
+  --color-accent-50: #ecfdf5;
+  --color-accent-100: #d1fae5;
+  --color-accent-200: #a7f3d0;
+  --color-accent-500: #10b981;
+  --color-accent-600: #059669;
+  --color-accent-700: #047857;
+
+  /* Neutrals come from Tailwind's built-in gray-* scale, which already matches
+     the spec exactly: gray-50 #f9fafb (page bg), gray-500 #6b7280 (secondary
+     text). Use gray-*, never slate-*, so the greys stay consistent. */
+
+  /* Card elevation. Spec: 0 1px 3px rgba(0,0,0,0.1). */
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.1);
+  --shadow-card-hover: 0 10px 20px -6px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.06);
 }
 
 body {
-  @apply bg-calm-50 text-calm-900 antialiased;
+  @apply bg-gray-50 text-gray-900 antialiased;
+  /* Long-form reading comfort — matters most on the entry and analysis pages. */
+  line-height: 1.6;
+}
+
+/* Headings set their own tighter leading; 1.6 is for body copy. */
+h1,
+h2,
+h3,
+h4 {
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+/* Consistent focus ring for every interactive element, including those that
+   render as links rather than buttons. */
+:where(a, button, input, textarea, select):focus-visible {
+  @apply outline-none ring-2 ring-brand-500 ring-offset-2 ring-offset-gray-50;
+}
+
+/* The therapist/coach report is printed via the browser, so chrome that isn't
+   part of the document is dropped. */
+@media print {
+  nav,
+  .print\:hidden {
+    display: none !important;
+  }
+
+  body {
+    background: #fff;
+  }
 }

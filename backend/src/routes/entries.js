@@ -4,13 +4,43 @@ import { analyzeEntry } from '../lib/anthropic.js';
 
 const router = Router();
 
-const FREE_TIER_ENTRY_LIMIT = 3;
+const PAID_TIERS = new Set(['pro', 'premium']);
 
-// In-memory guard: max one Claude analysis per user per 5 minutes.
-// Fine for a single-instance MVP; swap for a DB-backed timestamp check
-// (or Redis) if the backend ever runs multiple instances.
-const lastAnalysisAt = new Map();
-const ANALYSIS_COOLDOWN_MS = 5 * 60 * 1000;
+const INSIGHT_COLUMNS = `avoidance_triggers, time_blindness_indicators, emotional_detected,
+  emotional_type, emotional_intensity, hyperfocus_detected, hyperfocus_topic, time_estimated,
+  time_actual, time_difference, estimated_minutes, actual_minutes, adhd_insights,
+  actionable_suggestion, created_at`;
+
+// Both POST / (first analysis) and POST /:id/analyze (retry) persist the same
+// insight shape. One mapping, one place to change when the schema moves — a
+// second copy would drift the moment either handler is touched.
+function insertInsight(supabase, { userId, entryId, analysis }) {
+  const emotional = analysis.emotional_dysregulation ?? {};
+  const timing = analysis.time_estimation ?? {};
+
+  return supabase
+    .from('insights')
+    .insert({
+      user_id: userId,
+      entry_id: entryId,
+      avoidance_triggers: analysis.avoidance_triggers ?? [],
+      time_blindness_indicators: analysis.time_blindness_indicators ?? [],
+      emotional_detected: Boolean(emotional.detected),
+      emotional_type: emotional.detected ? (emotional.type ?? null) : null,
+      emotional_intensity: emotional.detected ? (emotional.intensity ?? null) : null,
+      hyperfocus_detected: Boolean(analysis.hyperfocus_detected),
+      hyperfocus_topic: analysis.hyperfocus_detected ? (analysis.hyperfocus_topic ?? null) : null,
+      time_estimated: timing.estimated ?? null,
+      time_actual: timing.actual ?? null,
+      time_difference: timing.difference ?? null,
+      estimated_minutes: timing.estimated_minutes ?? null,
+      actual_minutes: timing.actual_minutes ?? null,
+      adhd_insights: analysis.adhd_insights ?? null,
+      actionable_suggestion: analysis.actionable_suggestion ?? null,
+    })
+    .select(INSIGHT_COLUMNS)
+    .single();
+}
 
 router.use(requireAuth);
 
@@ -33,13 +63,13 @@ router.get('/:id', async (req, res) => {
 
   if (error) return res.status(404).json({ error: 'Entry not found.' });
 
-  const { data: insights } = await req.supabase
+  const { data: insight } = await req.supabase
     .from('insights')
-    .select('themes, analysis_text, created_at')
+    .select(INSIGHT_COLUMNS)
     .eq('entry_id', req.params.id)
     .maybeSingle();
 
-  res.json({ ...entry, insight: insights ?? null });
+  res.json({ ...entry, insight: insight ?? null });
 });
 
 router.post('/', async (req, res) => {
@@ -57,22 +87,10 @@ router.post('/', async (req, res) => {
 
   if (profileError) return res.status(500).json({ error: profileError.message });
 
-  if (profile.subscription_tier === 'free') {
-    const { count, error: countError } = await req.supabase
-      .from('entries')
-      .select('id', { count: 'exact', head: true });
-
-    if (countError) return res.status(500).json({ error: countError.message });
-    if (count >= FREE_TIER_ENTRY_LIMIT) {
-      return res.status(403).json({
-        error: `Free plan is limited to ${FREE_TIER_ENTRY_LIMIT} entries. Upgrade to write more.`,
-        code: 'ENTRY_LIMIT_REACHED',
-      });
-    }
-  }
-
   const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
 
+  // Writing is unlimited on every tier, including Free — only the AI analysis
+  // is gated.
   const { data: entry, error: insertError } = await req.supabase
     .from('entries')
     .insert({ user_id: req.user.id, content, word_count: wordCount })
@@ -81,33 +99,86 @@ router.post('/', async (req, res) => {
 
   if (insertError) return res.status(500).json({ error: insertError.message });
 
-  let insight = null;
-  const now = Date.now();
-  const lastRun = lastAnalysisAt.get(req.user.id) ?? 0;
-
-  if (now - lastRun >= ANALYSIS_COOLDOWN_MS) {
-    try {
-      const analysis = await analyzeEntry(content);
-      lastAnalysisAt.set(req.user.id, now);
-
-      const { data: savedInsight, error: insightError } = await req.supabase
-        .from('insights')
-        .insert({
-          user_id: req.user.id,
-          entry_id: entry.id,
-          themes: analysis.themes,
-          analysis_text: analysis.analysis_text,
-        })
-        .select()
-        .single();
-
-      if (!insightError) insight = savedInsight;
-    } catch (err) {
-      console.error('[entries] Claude analysis failed:', err.message);
-    }
+  if (!PAID_TIERS.has(profile.subscription_tier)) {
+    return res.status(201).json({ ...entry, insight: null, analysis_skipped: 'tier' });
   }
 
-  res.status(201).json({ ...entry, insight });
+  let insight = null;
+  let analysisError = null;
+
+  try {
+    const analysis = await analyzeEntry(content);
+
+    const { data: savedInsight, error: insightError } = await insertInsight(req.supabase, {
+      userId: req.user.id,
+      entryId: entry.id,
+      analysis,
+    });
+
+    if (insightError) analysisError = insightError.message;
+    else insight = savedInsight;
+  } catch (err) {
+    console.error('[entries] analysis failed:', err.message);
+    analysisError = 'Analysis unavailable - try again later.';
+  }
+
+  // The entry itself saved fine, so this is a 201 either way; the client shows
+  // the analysis gap rather than pretending the write failed.
+  res.status(201).json({ ...entry, insight, analysis_error: analysisError });
+});
+
+// Retry hook for an entry that saved but whose analysis failed (analysis
+// provider down, insert error). Deliberately NOT a regenerate: an entry that
+// already has an insight gets that insight back rather than a second inference.
+router.post('/:id/analyze', async (req, res) => {
+  const { data: entry, error: entryError } = await req.supabase
+    .from('entries')
+    .select('id, content')
+    .eq('id', req.params.id)
+    .single();
+
+  if (entryError || !entry) return res.status(404).json({ error: 'Entry not found.' });
+
+  const { data: profile, error: profileError } = await req.supabase
+    .from('users')
+    .select('subscription_tier')
+    .eq('id', req.user.id)
+    .single();
+
+  if (profileError) return res.status(500).json({ error: profileError.message });
+
+  if (!PAID_TIERS.has(profile.subscription_tier)) {
+    return res.status(403).json({ error: 'Analysis is a Pro feature.', code: 'TIER_REQUIRED' });
+  }
+
+  const { data: existing, error: existingError } = await req.supabase
+    .from('insights')
+    .select(INSIGHT_COLUMNS)
+    .eq('entry_id', entry.id)
+    .maybeSingle();
+
+  if (existingError) return res.status(500).json({ error: existingError.message });
+  if (existing) return res.json(existing);
+
+  let analysis;
+  try {
+    analysis = await analyzeEntry(entry.content);
+  } catch (err) {
+    console.error('[entries] re-analysis failed:', err.message);
+    return res.status(503).json({ error: 'Analysis unavailable - try again later.' });
+  }
+
+  // Kept outside the try above so a database failure reports as 500 rather than
+  // being blamed on the analysis provider with a misleading 503.
+  const { data: insight, error: insightError } = await insertInsight(req.supabase, {
+    userId: req.user.id,
+    entryId: entry.id,
+    analysis,
+  });
+
+  if (insightError) return res.status(500).json({ error: insightError.message });
+
+  res.json(insight);
 });
 
 router.delete('/:id', async (req, res) => {

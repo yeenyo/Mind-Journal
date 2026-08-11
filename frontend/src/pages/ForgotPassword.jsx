@@ -1,17 +1,35 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import Alert from '../components/Alert';
+import AuthCard from '../components/AuthCard';
+import Button from '../components/Button';
+import Field from '../components/Field';
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function ForgotPassword() {
   const { resetPassword } = useAuth();
   const [email, setEmail] = useState('');
+  const [touched, setTouched] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const trimmedEmail = email.trim();
+  const emailProblem = !trimmedEmail
+    ? 'Enter your email address.'
+    : !EMAIL_PATTERN.test(trimmedEmail)
+      ? 'That doesn’t look like an email address yet.'
+      : '';
 
   async function handleSubmit(e) {
     e.preventDefault();
+    if (emailProblem) return;
     setError('');
-    const { error: resetError } = await resetPassword(email);
+    setLoading(true);
+    const { error: resetError } = await resetPassword(trimmedEmail);
+    setLoading(false);
     if (resetError) {
       setError(resetError.message);
       return;
@@ -20,29 +38,51 @@ export default function ForgotPassword() {
   }
 
   return (
-    <div className="mx-auto flex min-h-[70vh] max-w-sm flex-col justify-center px-6">
-      <h1 className="text-2xl font-semibold text-calm-800">Reset your password</h1>
+    <AuthCard
+      title="Reset your password"
+      subtitle={sent ? undefined : 'We’ll email you a link to choose a new one.'}
+      footer={
+        <Link
+          to="/auth/login"
+          className="font-medium text-brand-700 underline underline-offset-2 hover:text-brand-800"
+        >
+          Back to log in
+        </Link>
+      }
+    >
       {sent ? (
-        <p className="mt-6 text-calm-600">Check your email for a password reset link.</p>
+        <Alert tone="success">
+          If an account exists for {trimmedEmail}, a reset link is on its way. The link expires in
+          one hour.
+        </Alert>
       ) : (
-        <form onSubmit={handleSubmit} className="mt-6 flex flex-col gap-4">
-          <input
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
+          <Field
+            label="Email"
             type="email"
             required
-            placeholder="Email"
+            autoComplete="email"
+            placeholder="you@example.com"
+            hint="Use the address you signed up with."
             value={email}
+            error={touched ? emailProblem : ''}
             onChange={(e) => setEmail(e.target.value)}
-            className="rounded-md border border-calm-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-calm-400"
+            onBlur={() => setTouched(true)}
           />
-          {error && <p className="text-sm text-red-600">{error}</p>}
-          <button type="submit" className="rounded-md bg-calm-600 px-4 py-2 text-white hover:bg-calm-700">
+
+          <Alert tone="error">{error}</Alert>
+
+          <Button
+            type="submit"
+            fullWidth
+            disabled={Boolean(emailProblem)}
+            loading={loading}
+            loadingText="Sending…"
+          >
             Send reset link
-          </button>
+          </Button>
         </form>
       )}
-      <Link to="/auth/login" className="mt-4 text-sm text-calm-600 underline">
-        Back to log in
-      </Link>
-    </div>
+    </AuthCard>
   );
 }

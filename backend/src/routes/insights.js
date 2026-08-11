@@ -1,54 +1,41 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/requireAuth.js';
+import { aggregateInsights } from '../lib/insightsAggregate.js';
 
 const router = Router();
 router.use(requireAuth);
 
 const RANGE_DAYS = { '7d': 7, '30d': 30, all: null };
+const PAID_TIERS = new Set(['pro', 'premium']);
 
 router.get('/', async (req, res) => {
   const range = RANGE_DAYS[req.query.range] !== undefined ? req.query.range : '30d';
   const days = RANGE_DAYS[range];
-
   const since = days ? new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString() : null;
 
-  let insightsQuery = req.supabase
-    .from('insights')
-    .select('themes, analysis_text, created_at')
-    .order('created_at', { ascending: true });
-  let entriesQuery = req.supabase.from('entries').select('id', { count: 'exact', head: true });
+  const { data: profile, error: profileError } = await req.supabase
+    .from('users')
+    .select('subscription_tier')
+    .eq('id', req.user.id)
+    .single();
+  if (profileError) return res.status(500).json({ error: profileError.message });
 
-  if (since) {
-    insightsQuery = insightsQuery.gte('created_at', since);
-    entriesQuery = entriesQuery.gte('created_at', since);
+  const tier = profile.subscription_tier;
+
+  // Free tier has no analysis to aggregate, so this is an upsell payload rather
+  // than an error — the page renders a locked state from it.
+  if (!PAID_TIERS.has(tier)) {
+    return res.json({ range, tier, locked: true });
   }
 
-  const [{ data, error }, { count: totalEntries, error: countError }] = await Promise.all([
-    insightsQuery,
-    entriesQuery,
-  ]);
-  if (error) return res.status(500).json({ error: error.message });
-  if (countError) return res.status(500).json({ error: countError.message });
-
-  const themeStats = new Map();
-  for (const row of data) {
-    for (const theme of row.themes ?? []) {
-      const key = theme.toLowerCase();
-      if (!themeStats.has(key)) {
-        themeStats.set(key, { theme, frequency: 0, firstSeen: row.created_at });
-      }
-      themeStats.get(key).frequency += 1;
-    }
+  let aggregate;
+  try {
+    aggregate = await aggregateInsights(req.supabase, req.user.id, { since });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
 
-  const themes = [...themeStats.values()].sort((a, b) => b.frequency - a.frequency);
-
-  res.json({
-    range,
-    totalEntries,
-    mostCommonTheme: themes[0]?.theme ?? null,
-    themes,
-  });
+  res.json({ range, tier, locked: false, ...aggregate });
 });
 
 export default router;
